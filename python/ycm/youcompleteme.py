@@ -47,6 +47,9 @@ from ycm.client.omni_completion_request import OmniCompletionRequest
 from ycm.client.event_notification import SendEventNotificationAsync
 from ycm.client.shutdown_request import SendShutdownRequest
 from ycm.client.messages_request import MessagesPoll
+from ycm.ai_completion import ( SendAiCompletionRequest,
+                                  CancelAiCompletionRequest,
+                                  ClearAiSuggestion )
 
 
 def PatchNoProxy():
@@ -357,6 +360,19 @@ class YouCompleteMe:
 
   def GetCompletionResponse( self ):
     return self._latest_completion_request.Response()
+
+
+  def RequestAICompletion( self ):
+    """Non-blocking poll for AI ghost text. Called from VimL timer.
+
+    Returns cached suggestion or '' if not ready yet.
+    """
+    return SendAiCompletionRequest()
+
+
+  def CancelAICompletion( self ):
+    """Kill any in-flight AI request. Called on TextChangedI."""
+    CancelAiCompletionRequest()
 
 
   def SignatureHelpAvailableRequestComplete( self, filetype, send_new=True ):
