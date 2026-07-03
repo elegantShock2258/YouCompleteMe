@@ -48,6 +48,7 @@ Contents
 - [Quick Feature Summary](#quick-feature-summary)
 - [User Guide](#user-guide)
     - [General Usage](#general-usage)
+    - [AI-Powered Completion](#ai-powered-completion)
     - [Client-Server Architecture](#client-server-architecture)
     - [Completion String Ranking](#completion-string-ranking)
     - [General Semantic Completion](#general-semantic-completion)
@@ -659,6 +660,7 @@ Quick Feature Summary
 * File and path suggestions
 * Suggestions from Vim's omnifunc
 * UltiSnips snippet suggestions
+* AI-powered inline suggestions (Copilot-style ghost text) — DeepSeek, OpenAI, Gemini, Ollama
 
 ### C-family languages (C, C++, Objective C, Objective C++, CUDA)
 
@@ -873,6 +875,78 @@ filepath completer.
 YCM automatically detects which completion engine would be the best in any
 situation. On occasion, it queries several of them at once, merges the
 outputs and presents the results to you.
+
+### AI-Powered Completion
+
+YCM can provide **inline code suggestions** using large language models, similar
+to GitHub Copilot. When you pause typing, a faded gray "ghost text" suggestion
+appears inline showing what the AI thinks should come next. Press **Tab** to
+accept it, or keep typing to dismiss it.
+
+**Supported providers:** [DeepSeek](https://platform.deepseek.com),
+[OpenAI / ChatGPT](https://platform.openai.com),
+[Google Gemini](https://ai.google.dev), and
+[Ollama](http://localhost:11434) (local models).
+
+#### Setup
+
+1. **Enable the AI completer** in your `default_settings.json` (located in
+   `third_party/ycmd/ycmd/`):
+
+   ```json
+   "ai_completion": {
+       "enabled": true,
+       "provider": "deepseek",
+       "deepseek_api_key": "sk-YOUR-KEY-HERE",
+       "deepseek_model": "deepseek-chat"
+   }
+   ```
+
+   For Ollama (local, no API key):
+   ```json
+   "ai_completion": {
+       "enabled": true,
+       "provider": "ollama",
+       "ollama_model": "codellama"
+   }
+   ```
+
+2. **Enable ghost text** in your `vimrc`:
+
+   ```viml
+   let g:ycm_ai_enabled = 1
+   ```
+
+3. **Restart YCM**: `:YcmRestartServer`
+
+#### How it works
+
+- Start typing — after a short pause (~300ms), a faded suggestion appears
+- Press **Tab** to accept the suggestion
+- Press **Alt+/** (`<M-/>`) to manually trigger a suggestion
+- Press **Escape** or keep typing to dismiss the ghost text
+- The suggestion appears in a dimmed gray italic style (configurable)
+- Suggestions are cached locally in a SQLite database to avoid redundant API
+  calls — typing the same prefix at the same position returns instantly from
+  cache
+
+#### Providers
+
+| Provider  | Configuration key       | Requires            |
+|-----------|------------------------|---------------------|
+| DeepSeek  | `deepseek_api_key`     | [API key](https://platform.deepseek.com) |
+| OpenAI    | `openai_api_key`       | [API key](https://platform.openai.com)   |
+| Gemini    | `gemini_api_key`       | [API key](https://ai.google.dev)         |
+| Ollama    | `ollama_host`          | [Local install](https://ollama.com)      |
+
+#### Performance
+
+YCM minimises redundant API calls by:
+- Only requesting suggestions when you pause typing (debounced at 300ms)
+- Cancelling in-flight requests the moment you resume typing
+- Caching responses in a local SQLite database (`~/.cache/ycmd/ycm_ai_cache.db`)
+- Deduplicating identical requests at the same cursor position
+- Requiring at least 3 characters typed before sending a request
 
 ### Client-Server Architecture
 
@@ -3870,6 +3944,63 @@ Default: `1`
 
 ```viml
 let g:ycm_update_diagnostics_in_insert_mode = 1
+```
+
+### The `g:ycm_ai_enabled` option
+
+Master switch for AI-powered inline suggestions (Copilot-style ghost text). When
+enabled, YCM displays faded inline suggestions from your chosen AI provider as
+you type. Set to `0` to disable.
+
+Default: `1`
+
+```viml
+let g:ycm_ai_enabled = 1
+```
+
+### The `g:ycm_ai_faded_color` option
+
+Controls the color of the AI ghost text shown inline. The suggestion appears in
+this color with italic styling, mimicking GitHub Copilot's dimmed suggestion
+appearance. Accepts any valid Vim color value (hex, named color, etc.).
+
+Default: `'#666666'`
+
+```viml
+let g:ycm_ai_faded_color = '#888888'
+```
+
+### The `g:ycm_ai_debounce_ms` option
+
+Delay in milliseconds after the user stops typing before an AI suggestion is
+requested. Higher values reduce API calls but feel less responsive. Lower values
+are more responsive but may cause more API usage.
+
+Default: `300`
+
+```viml
+let g:ycm_ai_debounce_ms = 300
+```
+
+### The `g:ycm_ai_key_accept` option
+
+Key used to accept the currently visible AI ghost text suggestion. When no
+suggestion is visible, this key falls through to its normal Vim behavior.
+
+Default: `'<Tab>'`
+
+```viml
+let g:ycm_ai_key_accept = '<Tab>'
+```
+
+### The `g:ycm_ai_key_manual_trigger` option
+
+Key chord that manually requests an AI suggestion, bypassing the debounce timer.
+
+Default: `'<M-/>'`
+
+```viml
+let g:ycm_ai_key_manual_trigger = '<M-/>'
 ```
 
 FAQ
