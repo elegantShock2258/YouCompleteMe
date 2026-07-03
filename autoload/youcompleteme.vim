@@ -186,6 +186,9 @@ function! youcompleteme#Enable()
   py3 ycm_semantic_highlighting.Initialise()
   let s:enable_inlay_hints = py3eval( 'ycm_inlay_hints.Initialise()' ) ? 1 : 0
 
+  " Enable AI copilot ghost text if the feature is turned on.
+  call youcompleteme#ai#Enable()
+
   call youcompleteme#EnableCursorMovedAutocommands()
   augroup youcompleteme
     autocmd!
