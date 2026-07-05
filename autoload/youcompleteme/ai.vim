@@ -25,7 +25,7 @@
 "
 " Global settings (set in vimrc before YCM loads):
 "   g:ycm_ai_enabled           - Enable/disable AI ghost text (default: 1)
-"   g:ycm_ai_key_accept        - Key to accept suggestion  (default: '<Tab>')
+"   g:ycm_ai_key_accept        - Key to accept suggestion  (default: '<Right>')
 "   g:ycm_ai_key_manual_trigger- Key to manually trigger    (default: '<M-/>')
 "   g:ycm_ai_faded_color       - Hex colour for ghost text  (default: '#666666')
 "   g:ycm_ai_debounce_ms       - Debounce delay in ms       (default: 300)
@@ -68,6 +68,10 @@ let s:ai_suggestion_active = 0
 
 " The text of the current suggestion (used by AcceptSuggestion).
 let s:ai_current_suggestion = ''
+
+" The text to be inserted by InsertText() (used in the expression register
+" pattern, passed from AcceptOrRight() to InsertText() via remove()).
+let s:ai_insert_text = ''
 
 " --- Vim 9.0+ property types ---
 " The ID of the prop_add() text property used to display ghost text in Vim.
@@ -172,63 +176,119 @@ endfunction
 " ============================================================================
 
 function! youcompleteme#ai#ShowSuggestion( suggestion_text )
-  " Store the suggestion text for later acceptance.
-  let s:ai_current_suggestion = a:suggestion_text
-
   " Bail out if the text is empty -- nothing to show.
   if empty( a:suggestion_text )
     call youcompleteme#ai#ClearSuggestion()
     return
   endif
 
-  " Clear any previous suggestion before showing the new one.
+  " Clear previous suggestion BEFORE storing the new one.
+  " ClearSuggestion() resets s:ai_current_suggestion to '',
+  " so it MUST run before we store the new text below.
   call youcompleteme#ai#ClearSuggestion()
 
+  " Store the suggestion text for later acceptance by AcceptOrRight().
+  let s:ai_current_suggestion = a:suggestion_text
+
+  " Extract the current line's indentation (leading whitespace) so that
+  " multiline suggestions are indented to match the surrounding code.
+  let l:current_line = getline( '.' )
+  let l:indent = matchstr( l:current_line, '^\s*' )
+  let l:indent_str = empty( l:indent ) ? '' : l:indent
+
   if s:is_neovim
-    " ---- Neovim path: use nvim_buf_set_extmark ----
-    " Neovim uses 0-based line and column numbers.
-    " 'virt_text_pos': 'overlay' places the virtual text inline at the cursor.
-    " 'hl_mode': 'combine' allows the highlight to layer with syntax colours.
+    " ---- Neovim path: multiline virtual text via extmarks ----
     let l:bufnr = bufnr( '%' )
     let l:line = line( '.' ) - 1
     let l:col = col( '.' ) - 1
 
-    " Use our dedicated AI namespace (s:ai_namespace_id), created at load time.
-    " This keeps AI ghost text extmarks separate from the main YCM namespace.
+    " Split the suggestion into lines for proper multiline display.
+    let l:suggestion_lines = split( a:suggestion_text, '\n', 1 )
     let l:ns_id = s:ai_namespace_id
 
-    let s:ai_extmark_id = nvim_buf_set_extmark( l:bufnr,
-          \ l:ns_id,
-          \ l:line,
-          \ l:col,
-          \ {
-          \   'virt_text': [ [ a:suggestion_text, 'YcmAISuggestion' ] ],
+    " First line: inline overlay at cursor position (faded ghost text).
+    let l:first_line = l:suggestion_lines[ 0 ]
+
+    " Subsequent lines: use virt_lines to show below the current line.
+    " Each continuation line gets the same indentation as the current line
+    " so the suggestion looks like naturally formatted code.
+    let l:virt_lines = []
+    for l:i in range( 1, len( l:suggestion_lines ) - 1 )
+      let l:cont = l:suggestion_lines[ l:i ]
+      " Apply the current line's indentation to continuation lines.
+      " If the continuation line already starts with whitespace, preserve
+      " the relative indentation (i.e. deeper nesting) on top of ours.
+      let l:cont_trimmed = substitute( l:cont, '^\s*', '', '' )
+      let l:cont_indent = matchstr( l:cont, '^\s*' )
+      " Use whichever is deeper: current line indent or suggestion's own.
+      if len( l:cont_indent ) >= len( l:indent_str )
+        let l:indented = l:cont
+      else
+        let l:indented = l:indent_str . l:cont_trimmed
+      endif
+      call add( l:virt_lines, [ [ l:indented, 'YcmAISuggestion' ] ] )
+    endfor
+
+    let l:opts = {
+          \   'virt_text': [ [ l:first_line, 'YcmAISuggestion' ] ],
           \   'virt_text_pos': 'overlay',
           \   'hl_mode': 'combine',
           \   'priority': 100,
-          \ } )
+          \ }
+
+    if !empty( l:virt_lines )
+      let l:opts[ 'virt_lines' ] = l:virt_lines
+      " virt_lines_above: v:false means lines appear BELOW the cursor line.
+      let l:opts[ 'virt_lines_above' ] = v:false
+    endif
+
+    let s:ai_extmark_id = nvim_buf_set_extmark(
+          \ l:bufnr, l:ns_id, l:line, l:col, l:opts )
     let s:ai_suggestion_active = 1
+
   else
-    " ---- Vim 9.0+ path: use prop_add ----
-    " Ensure the property type is defined.
+    " ---- Vim 9.0+ path: use prop_add + popup for multiline ----
     call s:SetupPropType()
 
-    " Add ghost text at end of line (column 0 required for
-    " text_align 'after'). Shows the AI suggestion inline in
-    " faded gray (GitHub Copilot style). Falls back to :echom
-    " if Vim doesn't support prop_add.
+    " Split the suggestion into lines.
+    let l:suggestion_lines = split( a:suggestion_text, '\n', 1 )
+    let l:first_line = l:suggestion_lines[ 0 ]
+
+    " For the first line: show as inline ghost text at end of current line.
     try
       let s:ai_prop_id = prop_add( line( '.' ),
             \ 0,
             \ {
             \   'type': 'YcmAISuggestion',
-            \   'text': a:suggestion_text,
+            \   'text': l:first_line,
             \   'text_align': 'after',
             \ } )
       let s:ai_suggestion_active = 1
     catch /.*/
-      echom '🤖 YCM AI: ' . a:suggestion_text
+      echom '🤖 YCM AI: ' . l:first_line
     endtry
+
+    " For multiline suggestions in Vim: show continuation lines as
+    " individual props on virtual empty lines below. We create empty
+    " props for subsequent lines below the current line.
+    if len( l:suggestion_lines ) > 1
+      let l:lnum = line( '.' ) + 1
+      for l:i in range( 1, len( l:suggestion_lines ) - 1 )
+        let l:cont = l:suggestion_lines[ l:i ]
+        " Match indentation of current line for each continuation.
+        let l:cont_trimmed = substitute( l:cont, '^\s*', '', '' )
+        let l:indented = l:indent_str . l:cont_trimmed
+        try
+          call prop_add( l:lnum, 1, {
+                \   'type': 'YcmAISuggestion',
+                \   'text': l:indented,
+                \   'text_align': 'after',
+                \ } )
+        catch /.*/
+        endtry
+        let l:lnum += 1
+      endfor
+    endif
   endif
 endfunction
 
@@ -278,24 +338,89 @@ endfunction
 " ============================================================================
 " youcompleteme#ai#AcceptSuggestion()
 "
-" Accepts the currently visible AI suggestion: inserts the ghost text into the
-" buffer at the cursor position and clears the ghost text display.
+" Accepts the currently visible AI suggestion.  Uses the copilot-style
+" <C-R>= pattern with inline remove() to insert the suggestion text
+" via the expression register, handling special characters and multiline
+" correctly.
 "
 " Returns:
-"   The accepted suggestion text (useful for use in mappings via <C-R>=).
-"   Returns an empty string if no suggestion is active.
+"   A <C-R>= key sequence that inserts the suggestion text, or '' if
+"   no suggestion is active.
+"
+" Note: In contexts where the <C-R>= pattern is not suitable (e.g. custom
+" mappings that bypass <expr>), use AcceptOrRightFallback() instead for
+" direct setline/cursor insertion.
 " ============================================================================
 
 function! youcompleteme#ai#AcceptSuggestion()
-  if !s:ai_suggestion_active || empty( s:ai_current_suggestion )
+  let l:text = s:ai_current_suggestion
+  if empty( l:text )
     return ''
   endif
-
-  let l:text = s:ai_current_suggestion
+  let s:ai_insert_text = l:text
   call youcompleteme#ai#ClearSuggestion()
-  " Return the text so the <expr> mapping inserts it.
-  " Do NOT use feedkeys() here — the expr mapping handles insertion.
-  return l:text
+  echom 'YCM AI: accepted ' . len( l:text ) . ' chars'
+  return "\<C-R>\<C-R>=remove(s:, 'ai_insert_text')\<CR>"
+endfunction
+
+" ============================================================================
+" s:InsertSuggestionText()
+"
+" Internal helper that inserts the currently stored suggestion text directly
+" into the buffer using setline()/cursor() manipulation.  This avoids the
+" unreliability of <expr> mappings on arrow keys, and avoids feedkeys()-based
+" corruption of special characters.
+"
+" Clears the suggestion state after insertion.
+" ============================================================================
+
+function! s:InsertSuggestionText()
+  " Try the primary source first (used when called directly from
+  " AcceptOrRightFallback() or user mappings), then fall back to the
+  " insert_text slot (which AcceptOrRight() populated before clearing
+  " the suggestion state -- useful if the <C-R>= pattern didn't consume
+  " it, e.g. on arrow key <expr> issues in some Vim versions).
+  let l:text = s:ai_current_suggestion
+  if empty( l:text )
+    let l:text = s:ai_insert_text
+    let s:ai_insert_text = ''
+  endif
+  call youcompleteme#ai#ClearSuggestion()
+
+  if empty( l:text )
+    return
+  endif
+
+  let l:line = line( '.' )
+  let l:col = col( '.' )
+  let l:current = getline( l:line )
+  let l:lines = split( l:text, '\n', 1 )
+
+  if len( l:lines ) == 1
+    " Single-line suggestion: insert into the current line at the cursor.
+    let l:before = strpart( l:current, 0, l:col )
+    let l:after = strpart( l:current, l:col )
+    call setline( l:line, l:before . l:lines[ 0 ] . l:after )
+    call cursor( l:line, l:col + len( l:lines[ 0 ] ) )
+  else
+    " Multi-line suggestion: split the current line and insert new lines.
+    let l:before = strpart( l:current, 0, l:col )
+    let l:after = strpart( l:current, l:col )
+
+    " First line: replace current line with before + first suggestion line.
+    call setline( l:line, l:before . l:lines[ 0 ] )
+
+    " Middle lines: insert after the current line.
+    for l:i in range( 1, len( l:lines ) - 2 )
+      call append( l:line + l:i - 1, l:lines[ l:i ] )
+    endfor
+
+    " Last line: append the after-cursor text.
+    call append( l:line + len( l:lines ) - 2, l:lines[ -1 ] . l:after )
+
+    " Position cursor at the end of the inserted text.
+    call cursor( l:line + len( l:lines ) - 1, len( l:lines[ -1 ] ) )
+  endif
 endfunction
 
 " ============================================================================
@@ -363,6 +488,14 @@ endfunction
 
 function! youcompleteme#ai#OnTextChanged()
   if !g:ycm_ai_enabled
+    return
+  endif
+
+  " Don't trigger while YCM's completion popup menu is visible.
+  " The popup handles its own navigation and acceptance; requesting an
+  " AI suggestion during popup navigation would cause flicker and
+  " interfere with YCM's selection flow.
+  if pumvisible()
     return
   endif
 
@@ -463,14 +596,13 @@ endfunction
 " Key mappings
 "
 " These mappings integrate AI ghost text suggestions with the keyboard:
-"   - <Tab> (or g:ycm_ai_key_accept):
-"       Accept the suggestion if one is visible; otherwise fall through to
-"       normal Tab behaviour (including YCM's popup menu navigation).
+"   - <Right> (or g:ycm_ai_key_accept, default <Right>):
+"       Accept the suggestion if one is visible; otherwise move cursor right.
+"   - <Tab>: UNTOUCHED — YCM's default popup navigation works normally.
 "   - <M-/> (or g:ycm_ai_key_manual_trigger):
 "       Manually request an AI suggestion.
 "   - <Esc>:
-"       Clear the popup menu (if visible) AND dismiss the ghost text before
-"       leaving insert mode.
+"       Clear ghost text before leaving insert mode.
 " ============================================================================
 
 function! youcompleteme#ai#SetupMappings()
@@ -478,41 +610,126 @@ function! youcompleteme#ai#SetupMappings()
     return
   endif
 
-  " --- Tab / Accept key ---
-  " Use an <expr> mapping so we can conditionally accept the suggestion or
-  " pass through to normal Tab behaviour.
+  " --- Right Arrow: accept AI ghost text ---
+  " <expr> mapping: returns a KEY SEQUENCE (not raw text) using the
+  " copilot-style <C-R>= pattern with inline remove().  This is the ONLY
+  " pattern that works correctly on arrow keys, special characters, and
+  " multiline text.
+  "
+  " If the <C-R>= pattern does not work in your Vim version (e.g. arrow
+  " key <expr> issues), use the fallback instead:
+  "   inoremap <expr> <silent> <Right>
+  "         \ youcompleteme#ai#AcceptOrRightFallback()
   execute 'inoremap <expr> <silent> ' . g:ycm_ai_key_accept .
-        \ ' youcompleteme#ai#AcceptOrTab()'
+        \ ' youcompleteme#ai#AcceptOrRight()'
+  echom 'YCM AI: accept key mapped to ' . g:ycm_ai_key_accept
 
   " --- Manual trigger key ---
-  " Uses <C-R>= to call the function and insert its return value (empty
-  " string) into the buffer.
   execute 'inoremap <silent> ' . g:ycm_ai_key_manual_trigger .
         \ ' <C-R>=youcompleteme#ai#RequestSuggestion()<CR>'
 
   " --- Escape key ---
-  " When the popup menu is visible, first close it with <C-e>, then leave
-  " insert mode. Also clear any visible ghost text before leaving insert
-  " mode (in case InsertLeave autocmd doesn't fire in time).
   inoremap <expr> <silent> <Esc> pumvisible()
         \ ? "\<C-e>\<Esc>"
         \ : youcompleteme#ai#ClearSuggestionWrapper() . "\<Esc>"
 endfunction
 
 " ============================================================================
-" youcompleteme#ai#AcceptOrTab()
+" youcompleteme#ai#AcceptOrRight()
 "
-" Expression mapping helper: if an AI suggestion is currently visible, accept
-" it. Otherwise, return a literal Tab key for normal usage (including YCM
-" popup menu navigation).
+" <expr> function for the accept key mapping (default: <Right>).
+" Returns a KEY SEQUENCE that uses the expression register (<C-R>=) with
+" inline remove() to retrieve the suggestion text.  This copilot-style
+" pattern handles special characters, arrow keys, and multiline text
+" correctly because the suggestion goes through the expression register
+" rather than being returned as raw text from the <expr> mapping.
 "
-" Returns:
-"   The suggestion text (for insertion) if active, or "\<Tab>" otherwise.
+" When no suggestion is active, returns the original key unchanged so the
+" mapping falls through to normal behaviour (e.g. cursor-right).
+"
+" YCM popup compatibility: when the completion popup menu is visible
+" (pumvisible() returns 1), the mapping passes through the original key
+" to allow popup navigation without interference.
+"
+" Right Arrow = accept ghost text, Tab = popup navigation (YCM default).
 " ============================================================================
 
-function! youcompleteme#ai#AcceptOrTab()
-  if s:ai_suggestion_active
-    return youcompleteme#ai#AcceptSuggestion()
+function! youcompleteme#ai#AcceptOrRight()
+  " DEBUG: log every call so we can trace what's happening.
+  echom 'YCM AI: TAB pressed | pum=' . pumvisible() . ' | suggestion=' . len( s:ai_current_suggestion ) . ' chars'
+
+  " If YCM's popup menu is visible, navigate it (<C-n> = next item).
+  if pumvisible()
+    echom 'YCM AI: -> popup visible, returning <C-n>'
+    return "\<C-n>"
+  endif
+
+  " AI suggestion stored -> return it directly for Vim to insert.
+  if !empty( s:ai_current_suggestion )
+    let l:text = s:ai_current_suggestion
+    call youcompleteme#ai#ClearSuggestion()
+    echom 'YCM AI: -> ACCEPTING ' . len( l:text ) . ' chars'
+    return l:text
+  endif
+
+  " No suggestion, no popup -> literal Tab.
+  echom 'YCM AI: -> no suggestion, returning <Tab>'
+  return "\<Tab>"
+endfunction
+
+" ============================================================================
+" youcompleteme#ai#InsertText()
+"
+" Called via <C-R>= to retrieve the stored suggestion text.  Uses
+" remove() to atomically get the text AND clear the script-local variable
+" in one operation -- the text is consumed on first retrieval so it cannot
+" be accidentally inserted twice.
+"
+" This function is an alternative to the inline remove() pattern used in
+" AcceptOrRight().  It can be useful in custom user mappings:
+"   inoremap <silent> <C-a>
+"         \ <C-R>=youcompleteme#ai#InsertText()<CR>
+"
+" Returns:
+"   The suggestion text previously stored by AcceptOrRight(), or '' if
+"   none (i.e. already consumed).
+" ============================================================================
+
+function! youcompleteme#ai#InsertText()
+  " One-shot: remove() gets the text AND clears the variable atomically.
+  return remove( s:, 'ai_insert_text' )
+endfunction
+
+" ============================================================================
+" youcompleteme#ai#AcceptOrRightFallback()
+"
+" Fallback accept function that uses direct buffer manipulation
+" (setline/cursor) instead of the <C-R>= pattern.  This is useful:
+"   - In Vim versions where <expr> mappings on arrow keys do not
+"     process returned keystrokes correctly
+"   - For users who prefer direct insertion over the expression register
+"   - As a recovery mechanism if the primary <C-R>= pattern fails
+"
+" To use this fallback instead of the default AcceptOrRight(), add to
+" your vimrc after YCM loads:
+"   inoremap <expr> <silent> <Right>
+"         \ youcompleteme#ai#AcceptOrRightFallback()
+"
+" Returns:
+"   An empty string (for use in <expr> mappings) after inserting the
+"   suggestion text directly into the buffer, or the original key if
+"   no suggestion is active.
+" ============================================================================
+
+function! youcompleteme#ai#AcceptOrRightFallback()
+  " Direct buffer manipulation fallback using setline/cursor/append.
+  " Does NOT rely on <expr> or <C-R>= — modifies the buffer directly.
+  if pumvisible()
+    return "\<C-n>"
+  endif
+  if !empty( s:ai_current_suggestion )
+    call s:InsertSuggestionText()
+    return ''
   endif
   return "\<Tab>"
 endfunction
