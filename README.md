@@ -878,10 +878,12 @@ outputs and presents the results to you.
 
 ### AI-Powered Completion
 
-YCM can provide **inline code suggestions** using large language models, similar
+![AI code completion preview](preview.png)
+
+YCM provides **inline code suggestions** using large language models, similar
 to GitHub Copilot. When you pause typing, a faded gray "ghost text" suggestion
-appears inline showing what the AI thinks should come next. Press **Tab** to
-accept it, or keep typing to dismiss it.
+appears inline showing what the AI thinks should come next. Press **Tab** or
+**Right Arrow** to accept it, or keep typing to dismiss it.
 
 **Supported providers:** [DeepSeek](https://platform.deepseek.com),
 [OpenAI / ChatGPT](https://platform.openai.com),
@@ -890,7 +892,7 @@ accept it, or keep typing to dismiss it.
 
 #### Setup
 
-1. **Enable the AI completer** in your `default_settings.json` (located in
+1. **Enable the AI completer** in `default_settings.json` (located in
    `third_party/ycmd/ycmd/`):
 
    ```json
@@ -902,12 +904,33 @@ accept it, or keep typing to dismiss it.
    }
    ```
 
-   For Ollama (local, no API key):
+   For Ollama (local, no API key needed):
    ```json
    "ai_completion": {
        "enabled": true,
        "provider": "ollama",
+       "ollama_host": "http://localhost:11434",
        "ollama_model": "codellama"
+   }
+   ```
+
+   For OpenAI:
+   ```json
+   "ai_completion": {
+       "enabled": true,
+       "provider": "openai",
+       "openai_api_key": "sk-YOUR-KEY-HERE",
+       "openai_model": "gpt-4o-mini"
+   }
+   ```
+
+   For Gemini:
+   ```json
+   "ai_completion": {
+       "enabled": true,
+       "provider": "gemini",
+       "gemini_api_key": "YOUR-KEY-HERE",
+       "gemini_model": "gemini-2.0-flash"
    }
    ```
 
@@ -917,18 +940,52 @@ accept it, or keep typing to dismiss it.
    let g:ycm_ai_enabled = 1
    ```
 
-3. **Restart YCM**: `:YcmRestartServer`
+3. **Restart Vim** (or run `:YcmRestartServer` to reload the ycmd server).
 
 #### How it works
 
-- Start typing — after a short pause (~300ms), a faded suggestion appears
-- Press **Tab** to accept the suggestion
+- Start typing — after a short pause (~300ms), a faded suggestion appears inline
+- Press **Tab** or **Right Arrow** to accept the suggestion
 - Press **Alt+/** (`<M-/>`) to manually trigger a suggestion
 - Press **Escape** or keep typing to dismiss the ghost text
-- The suggestion appears in a dimmed gray italic style (configurable)
+- The suggestion appears in a dimmed gray italic style (configurable via
+  `g:ycm_ai_faded_color`)
+- When the popup menu is visible, **Tab** navigates the popup; **Right Arrow**
+  accepts the ghost text regardless
 - Suggestions are cached locally in a SQLite database to avoid redundant API
   calls — typing the same prefix at the same position returns instantly from
   cache
+- Suggestions are context-aware: YCM scans open buffers and related files in
+  your project to build a relevant context for the AI
+
+#### Configuration
+
+**`default_settings.json` options** (in `third_party/ycmd/ycmd/`):
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `ai_completion.enabled` | `false` | Enable/disable the AI completer |
+| `ai_completion.provider` | `"deepseek"` | Provider: `deepseek`, `openai`, `gemini`, or `ollama` |
+| `ai_completion.debounce_ms` | `300` | Delay after typing stops before requesting |
+| `ai_completion.max_suggestion_chars` | `150` | Maximum characters in a suggestion |
+| `ai_completion.deepseek_api_key` | `""` | DeepSeek API key |
+| `ai_completion.deepseek_model` | `"deepseek-chat"` | DeepSeek model name |
+| `ai_completion.openai_api_key` | `""` | OpenAI API key |
+| `ai_completion.openai_model` | `"gpt-4o-mini"` | OpenAI model name |
+| `ai_completion.gemini_api_key` | `""` | Gemini API key |
+| `ai_completion.gemini_model` | `"gemini-2.0-flash"` | Gemini model name |
+| `ai_completion.ollama_host` | `"http://localhost:11434"` | Ollama server URL |
+| `ai_completion.ollama_model` | `"codellama"` | Ollama model name |
+
+**Vim options** (set in your `vimrc`):
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `g:ycm_ai_enabled` | `1` | Master switch for AI ghost text |
+| `g:ycm_ai_key_accept` | `'<Tab>'` | Key to accept ghost text |
+| `g:ycm_ai_key_manual_trigger` | `'<M-/>'` | Key to manually trigger a suggestion |
+| `g:ycm_ai_faded_color` | `'#666666'` | Ghost text color |
+| `g:ycm_ai_debounce_ms` | `300` | Debounce delay in milliseconds |
 
 #### Providers
 
