@@ -610,19 +610,18 @@ function! youcompleteme#ai#SetupMappings()
     return
   endif
 
-  " --- Right Arrow: accept AI ghost text ---
-  " <expr> mapping: returns a KEY SEQUENCE (not raw text) using the
-  " copilot-style <C-R>= pattern with inline remove().  This is the ONLY
-  " pattern that works correctly on arrow keys, special characters, and
-  " multiline text.
-  "
-  " If the <C-R>= pattern does not work in your Vim version (e.g. arrow
-  " key <expr> issues), use the fallback instead:
-  "   inoremap <expr> <silent> <Right>
-  "         \ youcompleteme#ai#AcceptOrRightFallback()
+  " --- Tab: primary accept key ---
+  " <expr> works reliably on Tab — returns suggestion text directly.
   execute 'inoremap <expr> <silent> ' . g:ycm_ai_key_accept .
         \ ' youcompleteme#ai#AcceptOrRight()'
   echom 'YCM AI: accept key mapped to ' . g:ycm_ai_key_accept
+
+  " --- Right Arrow: secondary accept key ---
+  " <Cmd> + setline/cursor for arrow keys since <expr> is unreliable on
+  " arrow keys in some Vim versions.  Direct buffer insertion bypasses
+  " the expression sandbox entirely.
+  inoremap <silent> <Right> <Cmd>call youcompleteme#ai#AcceptOrRightCmd()<CR>
+  echom 'YCM AI: secondary accept key mapped to <Right>'
 
   " --- Manual trigger key ---
   execute 'inoremap <silent> ' . g:ycm_ai_key_manual_trigger .
@@ -675,6 +674,35 @@ function! youcompleteme#ai#AcceptOrRight()
   " No suggestion, no popup -> literal Tab.
   echom 'YCM AI: -> no suggestion, returning <Tab>'
   return "\<Tab>"
+endfunction
+
+" ============================================================================
+" youcompleteme#ai#AcceptOrRightCmd()
+"
+" <Cmd> handler for <Right> mapping.  Uses direct buffer manipulation
+" (setline/cursor/append) instead of <expr> return values because <expr>
+" is unreliable on arrow keys in some Vim versions.
+"
+" Falls through to normal <Right> cursor movement when no suggestion is
+" active or the popup menu is visible.
+" ============================================================================
+
+function! youcompleteme#ai#AcceptOrRightCmd()
+  " Popup visible — pass through normal Right Arrow behavior.
+  if pumvisible()
+    execute "normal! \<Right>"
+    return
+  endif
+
+  " AI suggestion stored — insert it directly into the buffer.
+  if !empty( s:ai_current_suggestion )
+    echom 'YCM AI: ACCEPT via Right Arrow — ' . len( s:ai_current_suggestion ) . ' chars'
+    call s:InsertSuggestionText()
+    return
+  endif
+
+  " No suggestion, no popup — normal Right Arrow.
+  execute "normal! \<Right>"
 endfunction
 
 " ============================================================================
